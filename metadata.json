@@ -1,0 +1,6 @@
+{
+  "name": "Tasnim and Jannat Knit",
+  "description": "A high-performance full-stack ledger and client management system with secure authentication, client registers, automatic bills, date-range filters, and elegant printable invoice receipts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
