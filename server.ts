@@ -233,7 +233,14 @@ async function saveUser(user: any) {
 
   try {
     const { error } = await supabase.from("users").insert([user]);
-    if (error) console.error("Failed to write user to Supabase:", error.message);
+    if (error) {
+      if (error.message.includes("violates row-level security policy")) {
+        console.error("⚠️ Failed to write user to Supabase due to Row Level Security (RLS) policy restriction.");
+        console.error("👉 To fix this, please go to your Supabase SQL Editor and execute: 'ALTER TABLE public.users DISABLE ROW LEVEL SECURITY;'");
+      } else {
+        console.error("Failed to write user to Supabase:", error.message);
+      }
+    }
   } catch (err: any) {
     console.error("Supabase write user network error:", err.message);
   }
@@ -245,8 +252,22 @@ async function saveClient(client: Client) {
   saveDB(db);
 
   try {
-    const { error } = await supabase.from("clients").insert([client]);
-    if (error) console.error("Failed to write client to Supabase:", error.message);
+    let { error } = await supabase.from("clients").insert([client]);
+    if (error) {
+      // If error is about userId column missing (or undefined schema cache)
+      if (error.message.includes("userId") || error.message.includes("column")) {
+        console.warn("Supabase 'clients' table lacks 'userId' column. Retrying insert without it...");
+        const { userId, ...legacyClient } = client;
+        const retryResult = await supabase.from("clients").insert([legacyClient]);
+        if (retryResult.error) {
+          console.error("Failed to write legacy client to Supabase:", retryResult.error.message);
+        } else {
+          console.log("Successfully inserted client into legacy Supabase table without 'userId' column.");
+        }
+      } else {
+        console.error("Failed to write client to Supabase:", error.message);
+      }
+    }
   } catch (err: any) {
     console.error("Supabase write client network error:", err.message);
   }
@@ -274,8 +295,21 @@ async function saveLedgerEntry(entry: LedgerEntry) {
   saveDB(db);
 
   try {
-    const { error } = await supabase.from("ledger").insert([entry]);
-    if (error) console.error("Failed to write ledger entry to Supabase:", error.message);
+    let { error } = await supabase.from("ledger").insert([entry]);
+    if (error) {
+      if (error.message.includes("userId") || error.message.includes("column")) {
+        console.warn("Supabase 'ledger' table lacks 'userId' column. Retrying insert without it...");
+        const { userId, ...legacyEntry } = entry;
+        const retryResult = await supabase.from("ledger").insert([legacyEntry]);
+        if (retryResult.error) {
+          console.error("Failed to write legacy ledger entry to Supabase:", retryResult.error.message);
+        } else {
+          console.log("Successfully inserted ledger entry into legacy Supabase table without 'userId' column.");
+        }
+      } else {
+        console.error("Failed to write ledger entry to Supabase:", error.message);
+      }
+    }
   } catch (err: any) {
     console.error("Supabase write ledger entry network error:", err.message);
   }
@@ -315,13 +349,23 @@ async function bootstrapSupabase() {
     const { data: suClientsAll } = await supabase.from("clients").select("clientId").limit(1);
     if (suClientsAll && suClientsAll.length === 0 && db.clients.length > 0) {
       console.log(`Bootstrapping ${db.clients.length} clients onto Supabase...`);
-      await supabase.from("clients").insert(db.clients);
+      const { error: insertClientsErr } = await supabase.from("clients").insert(db.clients);
+      if (insertClientsErr && (insertClientsErr.message.includes("userId") || insertClientsErr.message.includes("column"))) {
+        console.warn("Retrying bootstrapping clients without 'userId' column due to legacy schema...");
+        const legacyClients = db.clients.map(({ userId, ...rest }) => rest);
+        await supabase.from("clients").insert(legacyClients);
+      }
     }
     
     const { data: suLedger } = await supabase.from("ledger").select("entryId").limit(1);
     if (suLedger && suLedger.length === 0 && db.ledger.length > 0) {
       console.log(`Bootstrapping ${db.ledger.length} ledger entries onto Supabase...`);
-      await supabase.from("ledger").insert(db.ledger);
+      const { error: insertLedgerErr } = await supabase.from("ledger").insert(db.ledger);
+      if (insertLedgerErr && (insertLedgerErr.message.includes("userId") || insertLedgerErr.message.includes("column"))) {
+        console.warn("Retrying bootstrapping ledger without 'userId' column due to legacy schema...");
+        const legacyLedger = db.ledger.map(({ userId, ...rest }) => rest);
+        await supabase.from("ledger").insert(legacyLedger);
+      }
     }
     
     console.log("Supabase bootstrapping check completed successfully.");
