@@ -32,7 +32,7 @@ interface DBData {
 }
 
 const PORT = 3000;
-const DB_FILE = path.join(process.cwd(), "database.json");
+const DB_FILE = process.env.VERCEL ? "/tmp/database.json" : path.join(process.cwd(), "database.json");
 
 // Security password hashing
 function hashPassword(password: string): string {
@@ -63,6 +63,18 @@ const defaultDB: DBData = {
 // Ensure database file exist
 function loadDB(): DBData {
   try {
+    if (process.env.VERCEL && !fs.existsSync(DB_FILE)) {
+      const rootDbFile = path.join(process.cwd(), "database.json");
+      if (fs.existsSync(rootDbFile)) {
+        try {
+          fs.copyFileSync(rootDbFile, DB_FILE);
+          console.log("Successfully copied local database.json to writable /tmp/database.json for Vercel execution.");
+        } catch (copyErr: any) {
+          console.error("Failed to copy database.json to /tmp space:", copyErr.message);
+        }
+      }
+    }
+
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, "utf-8");
       const parsed = JSON.parse(data);
@@ -491,8 +503,9 @@ async function safeGoogleSheetsSync(db: DBData) {
   }
 }
 
+const app = express();
+
 async function startServer() {
-  const app = express();
   app.use(express.json({ limit: "15mb" }));
   app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
@@ -896,9 +909,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Tasnim & Jannat Knit server started on http://0.0.0.0:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Tasnim & Jannat Knit server started on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
