@@ -3,8 +3,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { google } from "googleapis";
-import { createServer as createViteServer } from "vite";
-import { Client, LedgerEntry, GoogleSheetsConfig } from "./src/types.js";
+import type { Client, LedgerEntry, GoogleSheetsConfig } from "./src/types";
 import { createClient } from "@supabase/supabase-js";
 
 // Supabase details provided by user
@@ -12,6 +11,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "https://mypljqrkpubuceikaene.s
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15cGxqcXJrcHVidWNlaWthZW5lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5MzIwMjcsImV4cCI6MjA5NjUwODAyN30.Eycm0wGbKxGe8x5AmApNHSb0I31flUelXHYhr3pstO8";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Cache flags to avoid querying non-existent userId column on legacy databases
+let clientsTableHasUserId = true;
+let ledgerTableHasUserId = true;
 
 // Database structure
 interface DBData {
@@ -110,14 +113,17 @@ async function getClients(userId?: string): Promise<Client[]> {
 
   try {
     let query = supabase.from("clients").select("*");
-    if (userId) {
+    if (userId && clientsTableHasUserId) {
       query = query.eq("userId", userId);
     }
     let { data, error } = await query.order("createdAt", { ascending: true });
     
     // Resilient fallback: if query with userId filter fails (e.g., table has no userId column yet), get all and filter in JS
     if (error && userId) {
-      console.warn("Supabase clients query with userId equal filter failed, attempting manual client-side filter fallback:", error.message);
+      if (error.message.includes("column") && error.message.includes("userId")) {
+        clientsTableHasUserId = false;
+      }
+      console.info("Supabase 'clients' table uses legacy schema (no 'userId' column). Using memory partition cache.");
       const fallbackResult = await supabase.from("clients").select("*").order("createdAt", { ascending: true });
       if (!fallbackResult.error && fallbackResult.data) {
         data = fallbackResult.data.filter((c: any) => c.userId === userId);
@@ -161,14 +167,17 @@ async function getLedger(userId?: string): Promise<LedgerEntry[]> {
 
   try {
     let query = supabase.from("ledger").select("*");
-    if (userId) {
+    if (userId && ledgerTableHasUserId) {
       query = query.eq("userId", userId);
     }
     let { data, error } = await query.order("createdAt", { ascending: true });
     
     // Resilient fallback: if query with userId filter fails (e.g., table has no userId column yet), get all and filter in JS
     if (error && userId) {
-      console.warn("Supabase ledger query with userId equal filter failed, attempting manual client-side filter fallback:", error.message);
+      if (error.message.includes("column") && error.message.includes("userId")) {
+        ledgerTableHasUserId = false;
+      }
+      console.info("Supabase 'ledger' table uses legacy schema (no 'userId' column). Using memory partition cache.");
       const fallbackResult = await supabase.from("ledger").select("*").order("createdAt", { ascending: true });
       if (!fallbackResult.error && fallbackResult.data) {
         data = fallbackResult.data.filter((e: any) => e.userId === userId);
@@ -505,12 +514,11 @@ async function safeGoogleSheetsSync(db: DBData) {
 
 const app = express();
 
-async function startServer() {
-  app.use(express.json({ limit: "15mb" }));
-  app.use(express.urlencoded({ limit: "15mb", extended: true }));
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
-  // Bootstrap data onto Supabase asynchronously on startup
-  bootstrapSupabase();
+// Bootstrap data onto Supabase asynchronously on startup
+bootstrapSupabase();
 
   // API - Check Auth status or register or login
   app.post("/api/auth/register", async (req, res) => {
@@ -895,12 +903,19 @@ async function startServer() {
   });
 
   // Vite middleware for frontend development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    (async () => {
+      try {
+        const { createServer: createViteServer } = await import("vite");
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: "spa",
+        });
+        app.use(vite.middlewares);
+      } catch (err: any) {
+        console.error("Vite dynamic loading failed:", err.message);
+      }
+    })();
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -914,8 +929,5 @@ async function startServer() {
       console.log(`Tasnim & Jannat Knit server started on http://0.0.0.0:${PORT}`);
     });
   }
-}
-
-startServer();
 
 export default app;
