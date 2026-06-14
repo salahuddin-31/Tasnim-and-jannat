@@ -41,7 +41,16 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      
+      let data: any;
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const rawText = await res.text();
+        console.error("Non-JSON Response received:", rawText);
+        throw new Error(`সার্ভার থেকে ত্রুটিপূর্ণ রেসপন্স এসেছে: ${rawText.slice(0, 150)}`);
+      }
 
       if (!res.ok || !data.success) {
         throw new Error(data.message || "কোনো একটি সমস্যা হয়েছে!");

@@ -931,3 +931,6 @@ bootstrapSupabase();
   }
 
 export default app;
+if (typeof module !== "undefined") {
+  module.exports = app;
+}
